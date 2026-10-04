@@ -1,0 +1,18 @@
+# Visual Studio
+.vs/
+**/obj/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build logs and large APK files (exceeding GitHub 100MB limit)
+*.log
+*.apk
+
+# Temporary screen captures in root
+crop_*.png
+curr*.xml
+screen_*.png
+screen.png
+current_test.png
