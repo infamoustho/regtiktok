@@ -10,9 +10,16 @@
 *.log
 *.apk
 
-# Temporary screen captures in root
+# Temporary screen captures and test dumps in root
 crop_*.png
 curr*.xml
 screen_*.png
 screen.png
 current_test.png
+/*.png
+/*.xml
+/inspect_*
+/chrome-flow-review/
+WindowsFormsApp2/*.png
+WindowsFormsApp2/*.xml
+WindowsFormsApp2/WindowsFormsApp2/bin/Debug/runtimes/

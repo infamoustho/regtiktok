@@ -1046,7 +1046,7 @@ namespace WindowsFormsApp2
                 using (Process p = Process.Start(psi))
                 {
                     string output = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit();
+                    p.WaitForExit(15000);
                     return output;
                 }
             }
@@ -1054,6 +1054,11 @@ namespace WindowsFormsApp2
             {
                 return null;
             }
+        }
+
+        public static void AdbTap(string deviceID, int x, int y)
+        {
+            AdbShell(deviceID, $"input tap {x} {y}");
         }
 
         public static void GoHome(string deviceID)
@@ -1192,9 +1197,9 @@ namespace WindowsFormsApp2
         {
             try
             {
-                // Kiểm tra focus window: nếu đang ở app VPN (ExpressVPN/HMA) hoặc màn hình chọn account thì không phải Google Error
+                // Chỉ kiểm tra lỗi Google khi đang thực sự ở trong tiến trình Google Play Services (com.google.android.gms)
                 string focus = AdbShell(deviceID, "dumpsys window | grep mCurrentFocus");
-                if (!string.IsNullOrWhiteSpace(focus) && (focus.Contains("expressvpn") || focus.Contains("hidemyass") || focus.Contains("ChooseAccountActivity")))
+                if (string.IsNullOrWhiteSpace(focus) || !focus.Contains("com.google.android.gms") || focus.Contains("ChooseAccountActivity"))
                 {
                     return false;
                 }
@@ -3370,253 +3375,21 @@ namespace WindowsFormsApp2
                         GoHome(deviceID); // Về Home qua lệnh ADB keyevent 3, tuyệt đối không bấm trên màn hình tránh chạm Camera
                         await DelayWithPause(1500, token);
 
-                        // --- BƯỚC 2: MỞ TIKTOK & ĐĂNG KÝ VỚI GOOGLE (CÓ TỰ PHỤC HỒI NẾU TREO) ---
-                        bool tiktokLoginSuccess = false;
-
-                        for (int retryTikTokLogin = 0; retryTikTokLogin < 3; retryTikTokLogin++)
-                        {
-                            if (token.IsCancellationRequested) return;
-                            CheckPause(token);
-                            DismissSystemPopups(deviceID);
-
-                            if (retryTikTokLogin > 0)
-                            {
-                                UpdateProcess(deviceID + $" 🔄 [TỰ PHỤC HỒI] Kẹt ở bước TikTok đăng nhập Google -> Khôi phục lần {retryTikTokLogin}/2: Buộc dừng TikTok, mở lại...");
-                                CaptureErrorSnapshot(deviceID, $"TikTok_GoogleLogin_Timeout_L{retryTikTokLogin}");
-                                Android.DungApp(deviceID, "com.zhiliaoapp.musically");
-                                AdbShell(deviceID, "am force-stop com.zhiliaoapp.musically");
-                                GoHome(deviceID);
-                                await DelayWithPause(1500, token);
-                            }
-
-                            if (retryTikTokLogin == 0)
-                            {
-                                UpdateProcess(deviceID + " Xóa dữ liệu TikTok...");
-                                Android.XoaDuLieu(deviceID, "com.zhiliaoapp.musically");
-                                await DelayWithPause(1500, token);
-                            }
-
-                            UpdateProcess(deviceID + " Mở App TikTok...");
-                            Android.MoApp(deviceID, "com.zhiliaoapp.musically");
-                            await DelayWithPause(5000, token);
-
-                            // Bỏ qua popup khi mở lại nếu có
-                            string openXml = Android.GetUIDumpSafe(deviceID);
-                            if (openXml.Contains("Start watching"))
-                            {
-                                ifm.ClickByText(deviceID, "Start watching");
-                                await DelayWithPause(1500, token);
-                            }
-                            if (openXml.Contains("Not now"))
-                            {
-                                ifm.ClickByText(deviceID, "Not now");
-                                await DelayWithPause(1000, token);
-                            }
-
-                            UpdateProcess(deviceID + " Click Tiếp tục với Google & kiểm tra hộp thoại chọn tài khoản...");
-                            for (int g = 0; g < 10; g++)
-                            {
-                                if (token.IsCancellationRequested) return;
-                                CheckPause(token);
-                                DismissSystemPopups(deviceID);
-
-                                string ttXml = Android.GetUIDumpSafe(deviceID);
-                                if (!string.IsNullOrWhiteSpace(ttXml) && (ttXml.Contains("When’s your birthday?") || ttXml.Contains("birthday") || ttXml.Contains("Birthday") || ttXml.Contains("nickname") || ttXml.Contains("Nickname") || ttXml.Contains("Profile") || ttXml.Contains("Hồ sơ")))
-                                {
-                                    tiktokLoginSuccess = true;
-                                    break;
-                                }
-
-                                if (!string.IsNullOrWhiteSpace(ttXml))
-                                {
-                                    if (ttXml.Contains("Choose an account") ||
-                                        ttXml.Contains("Choose account") ||
-                                        ttXml.Contains("account_picker") ||
-                                        ttXml.Contains("account_name") ||
-                                        ttXml.Contains("continue_button") ||
-                                        ttXml.Contains("How it works") ||
-                                        ttXml.Contains("You're in control") ||
-                                        (!string.IsNullOrWhiteSpace(googleEmail) && ttXml.Contains(googleEmail)) ||
-                                        ttXml.Contains("tux_dual_ball_loading"))
-                                    {
-                                        UpdateProcess(deviceID + " 🟢 Đã xuất hiện hộp thoại chọn tài khoản Google!");
-                                        break;
-                                    }
-                                }
-
-                                string winFocus = AdbShell(deviceID, "dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'");
-                                if (!string.IsNullOrWhiteSpace(winFocus) && (winFocus.Contains("SignInHubActivity") || winFocus.Contains("ChooseAccountActivity") || winFocus.Contains("com.google.android.gms")))
-                                {
-                                    UpdateProcess(deviceID + " 🟢 Phát hiện màn hình xác thực Google đang mở!");
-                                    break;
-                                }
-
-                                UpdateProcess(deviceID + $" 👉 Hộp thoại chưa hiện, click 'Tiếp tục với Google' (lần {g + 1}/10)...");
-                                bool clickedG = false;
-
-                                if (!string.IsNullOrWhiteSpace(ttXml) && (ttXml.Contains("Continue with Google") || ttXml.Contains("Sign in with Google")))
-                                {
-                                    var mG = Regex.Match(ttXml, @"<node[^>]*?(?:text|content-desc)=""(?:Continue with Google|Sign in with Google)""[^>]*?bounds=""\[(\d+),(\d+)\]\[(\d+),(\d+)\]""");
-                                    if (mG.Success)
-                                    {
-                                        int cx = (int.Parse(mG.Groups[1].Value) + int.Parse(mG.Groups[3].Value)) / 2;
-                                        int cy = (int.Parse(mG.Groups[2].Value) + int.Parse(mG.Groups[4].Value)) / 2;
-                                        KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
-                                        clickedG = true;
-                                    }
-
-                                    if (!clickedG)
-                                    {
-                                        clickedG = ifm.ClickByText(deviceID, "Continue with Google");
-                                    }
-                                }
-
-                                if (!clickedG)
-                                {
-                                    clickedG = SafeClickVaoAnh(deviceID, token, img.google);
-                                }
-
-                                if (!clickedG && IsCurrentFocus(deviceID, "com.zhiliaoapp.musically"))
-                                {
-                                    KAutoHelper.ADBHelper.Tap(deviceID, 720, 2297);
-                                    await DelayWithPause(300, token);
-                                    KAutoHelper.ADBHelper.Tap(deviceID, 720, 1229);
-                                }
-
-                                await DelayWithPause(2500, token);
-                            }
-
-                            if (tiktokLoginSuccess) break;
-
-                            await DelayWithPause(1500, token);
-
-                            // Xử lý hộp thoại Google Sign In / Chọn tài khoản & Consent sheet
-                            UpdateProcess(deviceID + " Xử lý hộp thoại Google Sign In / Chọn tài khoản...");
-                            for (int gConsent = 0; gConsent < 15; gConsent++)
-                            {
-                                if (token.IsCancellationRequested) return;
-                                CheckPause(token);
-                                DismissSystemPopups(deviceID);
-
-                                string chXml = Android.GetUIDumpSafe(deviceID);
-                                if (string.IsNullOrWhiteSpace(chXml))
-                                {
-                                    await DelayWithPause(1000, token);
-                                    continue;
-                                }
-
-                                if (chXml.Contains("When’s your birthday?") || chXml.Contains("birthday") || chXml.Contains("Birthday") || chXml.Contains("nickname") || chXml.Contains("Nickname") || chXml.Contains("Profile") || chXml.Contains("Hồ sơ"))
-                                {
-                                    tiktokLoginSuccess = true;
-                                    break;
-                                }
-
-                                // 1. Màn hình Google Consent bottom sheet
-                                if (chXml.Contains("continue_button") || chXml.Contains("How it works") || chXml.Contains("You're in control"))
-                                {
-                                    UpdateProcess(deviceID + " 👉 Bấm Continue trên Google Identity bottom sheet...");
-                                    if (!ClickByResourceId(deviceID, "continue_button", chXml))
-                                    {
-                                        if (!ifm.ClickByText(deviceID, "Continue"))
-                                        {
-                                            KAutoHelper.ADBHelper.Tap(deviceID, 720, 2768);
-                                        }
-                                    }
-                                    await DelayWithPause(3000, token);
-                                    continue;
-                                }
-
-                                // 2. Màn hình "Choose an account"
-                                if (chXml.Contains("Choose an account") || chXml.Contains("Choose account") || chXml.Contains("account_picker_container") || chXml.Contains("account_name") || (!string.IsNullOrWhiteSpace(googleEmail) && chXml.Contains(googleEmail)))
-                                {
-                                    UpdateProcess(deviceID + " 👉 Chọn tài khoản trong hộp thoại Choose an account...");
-                                    bool accSelected = false;
-
-                                    if (!string.IsNullOrWhiteSpace(googleEmail) && chXml.Contains(googleEmail))
-                                    {
-                                        var mAcc = Regex.Match(chXml, $@"<node[^>]*?text=""{Regex.Escape(googleEmail)}""[^>]*?bounds=""\[(\d+),(\d+)\]\[(\d+),(\d+)\]""");
-                                        if (mAcc.Success)
-                                        {
-                                            int cx = (int.Parse(mAcc.Groups[1].Value) + int.Parse(mAcc.Groups[3].Value)) / 2;
-                                            int cy = (int.Parse(mAcc.Groups[2].Value) + int.Parse(mAcc.Groups[4].Value)) / 2;
-                                            KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
-                                            accSelected = true;
-                                        }
-                                    }
-
-                                    if (!accSelected)
-                                    {
-                                        accSelected = ClickByResourceId(deviceID, "account_name", chXml);
-                                    }
-                                    if (!accSelected)
-                                    {
-                                        accSelected = ClickByResourceId(deviceID, "container", chXml);
-                                    }
-                                    if (!accSelected && (IsCurrentFocus(deviceID, "ChooseAccountActivity") || IsCurrentFocus(deviceID, "SignInHubActivity")))
-                                    {
-                                        KAutoHelper.ADBHelper.Tap(deviceID, 720, 1529);
-                                    }
-
-                                    await DelayWithPause(3500, token);
-                                    continue;
-                                }
-
-                                // 3. Loading
-                                if (chXml.Contains("tux_dual_ball_loading"))
-                                {
-                                    UpdateProcess(deviceID + " ⏳ Đang tải xác thực tài khoản Google...");
-                                    await DelayWithPause(2000, token);
-                                    continue;
-                                }
-
-                                // 4. Continue with Google
-                                if (chXml.Contains("Continue with Google") || chXml.Contains("Sign in with Google"))
-                                {
-                                    UpdateProcess(deviceID + " 👉 Vẫn ở màn hình đăng nhập, click lại Continue with Google...");
-                                    var mG = Regex.Match(chXml, @"<node[^>]*?(?:text|content-desc)=""(?:Continue with Google|Sign in with Google)""[^>]*?bounds=""\[(\d+),(\d+)\]\[(\d+),(\d+)\]""");
-                                    if (mG.Success)
-                                    {
-                                        int cx = (int.Parse(mG.Groups[1].Value) + int.Parse(mG.Groups[3].Value)) / 2;
-                                        int cy = (int.Parse(mG.Groups[2].Value) + int.Parse(mG.Groups[4].Value)) / 2;
-                                        KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
-                                    }
-                                    else
-                                    {
-                                        if (!ifm.ClickByText(deviceID, "Continue with Google"))
-                                        {
-                                            if (IsCurrentFocus(deviceID, "com.zhiliaoapp.musically"))
-                                            {
-                                                KAutoHelper.ADBHelper.Tap(deviceID, 720, 2297);
-                                            }
-                                        }
-                                    }
-                                    await DelayWithPause(3000, token);
-                                    continue;
-                                }
-
-                                await DelayWithPause(1500, token);
-                            }
-
-                            if (tiktokLoginSuccess) break;
-                        }
-
-                        // CHỐT CHẶN GATE 2: Bắt buộc phải vào được Birthday / Nickname / Profile
+                        // --- BƯỚC 2: ĐĂNG KÝ TIKTOK QUA CHROME, SAU ĐÓ CHUYỂN SANG APP ---
+                        bool tiktokLoginSuccess = await RegisterTikTokInChromeThenOpenAppAsync(deviceID, googleEmail, token);
                         if (!tiktokLoginSuccess)
                         {
-                            string chkAfterLogin = Android.GetUIDumpSafe(deviceID);
-                            if (string.IsNullOrWhiteSpace(chkAfterLogin) || (!chkAfterLogin.Contains("birthday") && !chkAfterLogin.Contains("Birthday") && !chkAfterLogin.Contains("nickname") && !chkAfterLogin.Contains("Nickname") && !chkAfterLogin.Contains("Profile") && !chkAfterLogin.Contains("Hồ sơ")))
-                            {
-                                CaptureErrorSnapshot(deviceID, "TikTok_Login_Failed_Final");
-                                UpdateProcess(deviceID + " ❌ LỖI NGHIÊM TRỌNG: TikTok không thể đăng nhập bằng Google sau các lần tự phục hồi -> Dừng chu kỳ thiết bị!");
-                                UpdateDeviceLog(deviceID, "❌ Lỗi đăng nhập TikTok");
-                                await HandleGoogleErrorAndChangeDeviceAsync(deviceID, acc, token);
-                                continue;
-                            }
+                            CaptureErrorSnapshot(deviceID, "TikTok_Chrome_Login_Failed_Final");
+                            UpdateProcess(deviceID + " ❌ Không hoàn tất luồng đăng ký TikTok trong Chrome -> Đóng Chrome về Home (KHÔNG Change Device).");
+                            UpdateDeviceLog(deviceID, "❌ Lỗi đăng ký TikTok Chrome");
+                            AdbShell(deviceID, "am force-stop com.android.chrome");
+                            GoHome(deviceID);
+                            continue;
                         }
 
                         // --- BƯỚC 3: NHẬP NGÀY THÁNG NĂM SINH (TUỔI > 20 NHƯNG KHÔNG QUÁ GIÀ) ---
                         string curXml3 = Android.GetUIDumpSafe(deviceID);
-                        if (curXml3.Contains("When’s your birthday?") || curXml3.Contains("birthday") || curXml3.Contains("Birthday"))
+                        if (!TikTokAppIsLoggedIn(curXml3) && (curXml3.Contains("When’s your birthday?") || curXml3.Contains("birthday") || curXml3.Contains("Birthday")))
                         {
                             UpdateProcess(deviceID + " Nhập ngày tháng năm sinh (tuổi > 20, không quá già)...");
                             SafeClickVaoAnh(deviceID, token, img.bsn);
@@ -3665,6 +3438,7 @@ namespace WindowsFormsApp2
                         for (int nkAttempt = 0; nkAttempt < 3; nkAttempt++)
                         {
                             string nkXml = Android.GetUIDumpSafe(deviceID);
+                            if (TikTokAppIsLoggedIn(nkXml)) break;
                             if (nkXml.Contains("nickname") || nkXml.Contains("Nickname") || nkXml.Contains("Create nickname") || nkXml.Contains("Create name"))
                             {
                                 string nickname = Tiktok_helper.GenerateRandomNickname();
@@ -3713,9 +3487,9 @@ namespace WindowsFormsApp2
                                 {
                                     // Bấm trực tiếp tọa độ nút Continue/Confirm ở đáy màn hình (720, 2593) và phía trên (720, 1550)
                                     UpdateProcess(deviceID + " 👉 Tap tọa độ xác nhận Nickname (720, 2593)...");
-                                    KAutoHelper.ADBHelper.Tap(deviceID, 720, 2593);
+                                    AdbTap(deviceID, 720, 2593);
                                     await DelayWithPause(400, token);
-                                    KAutoHelper.ADBHelper.Tap(deviceID, 720, 1550);
+                                    AdbTap(deviceID, 720, 1550);
                                 }
 
                                 await DelayWithPause(2500, token);
@@ -3760,15 +3534,29 @@ namespace WindowsFormsApp2
 
                         // Bỏ qua popup khi mở lại nếu có
                         string reXml = Android.GetUIDumpSafe(deviceID);
-                        if (reXml.Contains("Start watching"))
+                        if (!string.IsNullOrWhiteSpace(reXml))
                         {
-                            ifm.ClickByText(deviceID, "Start watching");
-                            await DelayWithPause(1500, token);
-                        }
-                        if (reXml.Contains("Not now"))
-                        {
-                            ifm.ClickByText(deviceID, "Not now");
-                            await DelayWithPause(1000, token);
+                            if (reXml.Contains("Tell us more about yourself") || reXml.Contains("How do you identify") || reXml.Contains("Prefer not to say") ||
+                                reXml.Contains("Choose your interests") || reXml.Contains("Choose what you like"))
+                            {
+                                UpdateProcess(deviceID + " 👉 Gặp màn hình khảo sát/sở thích -> Bấm Skip...");
+                                if (!ClickByDumpXml(deviceID, "Skip", 1, 300) && !ifm.ClickByText(deviceID, "Skip"))
+                                {
+                                    AdbTap(deviceID, 407, 2771);
+                                }
+                                await DelayWithPause(2000, token);
+                                reXml = Android.GetUIDumpSafe(deviceID);
+                            }
+                            if (reXml.Contains("Start watching"))
+                            {
+                                ifm.ClickByText(deviceID, "Start watching");
+                                await DelayWithPause(1500, token);
+                            }
+                            if (reXml.Contains("Not now"))
+                            {
+                                ifm.ClickByText(deviceID, "Not now");
+                                await DelayWithPause(1000, token);
+                            }
                         }
 
                         // Vuốt xem video 5 lần, mỗi lần cách nhau 2s
@@ -3791,6 +3579,18 @@ namespace WindowsFormsApp2
                             if (string.IsNullOrWhiteSpace(vXml))
                             {
                                 await DelayWithPause(1000, token);
+                                continue;
+                            }
+
+                            if (vXml.Contains("Tell us more about yourself") || vXml.Contains("How do you identify") || vXml.Contains("Prefer not to say") ||
+                                vXml.Contains("Choose your interests") || vXml.Contains("Choose what you like"))
+                            {
+                                UpdateProcess(deviceID + " 👉 Gặp màn hình khảo sát/sở thích -> Bấm Skip...");
+                                if (!ClickByDumpXml(deviceID, "Skip", 1, 300) && !ifm.ClickByText(deviceID, "Skip"))
+                                {
+                                    AdbTap(deviceID, 407, 2771);
+                                }
+                                await DelayWithPause(2000, token);
                                 continue;
                             }
 
@@ -3829,7 +3629,7 @@ namespace WindowsFormsApp2
                         {
                             if (!ifm.ClickByText(deviceID, "Profile"))
                             {
-                                KAutoHelper.ADBHelper.Tap(deviceID, 1296, 2818);
+                                AdbTap(deviceID, 1296, 2818);
                             }
                         }
 
@@ -3838,7 +3638,7 @@ namespace WindowsFormsApp2
                         await DelayWithPause(3000, token);
                         if (!ClickByDumpXml(deviceID, "Profile", 1))
                         {
-                            KAutoHelper.ADBHelper.Tap(deviceID, 1296, 2818);
+                            AdbTap(deviceID, 1296, 2818);
                         }
                         await DelayWithPause(1500, token);
 
@@ -4488,7 +4288,737 @@ namespace WindowsFormsApp2
 
 
 
-        static Random rd = new Random();
+        private static readonly Random rd = new Random();
+
+        public async Task<bool> RunChromeFlowStandaloneAsync(string deviceID, string googleEmail)
+        {
+            currentDeviceID.Value = deviceID;
+            var devPauseEvt = devicePauseEvents.GetOrAdd(deviceID, _ => new ManualResetEventSlim(true));
+            devPauseEvt.Set();
+            devicePausedStatus[deviceID] = false;
+
+            using (var cts = new CancellationTokenSource())
+            {
+                var token = cts.Token;
+                UpdateProcess(deviceID + " 🌐 [STANDALONE TEST] Bắt đầu kiểm tra luồng Chrome TikTok...");
+                return await RegisterTikTokInChromeThenOpenAppAsync(deviceID, googleEmail, token);
+            }
+        }
+
+        void LogVisibleUiNodes(string deviceID, string xml)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(xml)) return;
+                var matches = Regex.Matches(xml, @"<node[^>]*?(text=""([^""]+)""|content-desc=""([^""]+)""|resource-id=""([^""]+)"")[^>]*?>");
+                var list = new List<string>();
+                foreach (Match m in matches)
+                {
+                    string t = m.Groups[2].Value.Trim();
+                    string d = m.Groups[3].Value.Trim();
+                    string id = m.Groups[4].Value.Trim();
+                    if (!string.IsNullOrEmpty(t) && t.Length > 1 && !t.Equals("true") && !t.Equals("false")) list.Add($"'{t}'");
+                    else if (!string.IsNullOrEmpty(d) && d.Length > 1) list.Add($"'{d}'");
+                    else if (!string.IsNullOrEmpty(id) && !id.EndsWith("layout") && !id.EndsWith("view") && !id.EndsWith("container")) list.Add($"[id:{id.Split('/').Last()}]");
+                }
+                if (list.Count > 0)
+                {
+                    UpdateProcess(deviceID + " 🔍 [UI hiện tại]: " + string.Join(", ", list.Distinct().Take(7)));
+                }
+            }
+            catch { }
+        }
+
+        public async Task<bool> RegisterTikTokInChromeThenOpenAppAsync(string deviceID, string googleEmail, CancellationToken token)
+        {
+            try
+            {
+                UpdateProcess(deviceID + " 🌐 Bắt đầu luồng mới: đăng ký TikTok bằng Chrome trước khi vào app...");
+
+                AdbShell(deviceID, "pm clear com.zhiliaoapp.musically");
+                AdbShell(deviceID, "am force-stop com.zhiliaoapp.musically");
+                await DelayWithPause(1500, token);
+
+                if (!await OpenTikTokSignupInChromeAsync(deviceID, token))
+                {
+                    UpdateProcess(deviceID + " ❌ Không mở được trang TikTok signup trong Chrome.");
+                    return false;
+                }
+
+                if (!await CompleteTikTokGoogleSignupInChromeAsync(deviceID, googleEmail, token))
+                {
+                    UpdateProcess(deviceID + " ❌ Không hoàn tất đăng ký TikTok bằng Google trong Chrome.");
+                    return false;
+                }
+
+                if (!await OpenTikTokAppAndAttachGoogleAsync(deviceID, googleEmail, token))
+                {
+                    UpdateProcess(deviceID + " ❌ Chrome đã đăng ký xong nhưng app TikTok chưa nhận được đăng nhập Google.");
+                    return false;
+                }
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                UpdateProcess(deviceID + " ❌ Lỗi luồng Chrome TikTok: " + ex.Message);
+                return false;
+            }
+        }
+
+        async Task<bool> OpenTikTokSignupInChromeAsync(string deviceID, CancellationToken token)
+        {
+            UpdateProcess(deviceID + " 🌐 Mở trang đăng ký TikTok trên Chrome...");
+            // Mở trực tiếp URL đăng ký bằng Chrome qua Intent VIEW
+            AdbShell(deviceID, "am start -a android.intent.action.VIEW -d \"https://www.tiktok.com/signup/\" com.android.chrome");
+            await DelayWithPause(5000, token);
+
+            await HandleChromeFirstRunAsync(deviceID, token);
+
+            for (int i = 0; i < 20; i++)
+            {
+                CheckPause(token);
+                string xml = Android.GetUIDumpSafe(deviceID);
+                if (string.IsNullOrWhiteSpace(xml))
+                {
+                    if (IsCurrentFocus(deviceID, "com.android.chrome") && i >= 3)
+                    {
+                        AdbTap(deviceID, 720, 500);
+                        await DelayWithPause(800, token);
+                        return true;
+                    }
+                    await DelayWithPause(1000, token);
+                    continue;
+                }
+
+                // Xử lý popup che màn hình (overlay hoặc infobar)
+                await DismissChromeBlockingPopupsAsync(deviceID, xml, token);
+
+                // Kiểm tra đã vào trang TikTok (URL bar có tiktok.com hoặc có nút đăng ký)
+                if (ChromeHasTikTokSignup(xml))
+                {
+                    // Đóng overlay nếu có
+                    if (xml.Contains("Get the full app experience") || xml.Contains("TikTok Lite") || xml.Contains("Open TikTok"))
+                    {
+                        AdbTap(deviceID, 720, 500);
+                        await DelayWithPause(800, token);
+                    }
+                    return true;
+                }
+
+                // Fallback nếu Chrome chưa load URL sau vài lần thử
+                if (i == 4)
+                {
+                    if (TapChromeAddressBar(deviceID))
+                    {
+                        await DelayWithPause(400, token);
+                        FastInputText(deviceID, "https://www.tiktok.com/signup/");
+                        await DelayWithPause(300, token);
+                        AdbShell(deviceID, "input keyevent 66");
+                        await DelayWithPause(4000, token);
+                    }
+                }
+
+                await DelayWithPause(1500, token);
+            }
+
+            return false;
+        }
+
+        async Task HandleChromeFirstRunAsync(string deviceID, CancellationToken token)
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                string xml = Android.GetUIDumpSafe(deviceID);
+                if (string.IsNullOrWhiteSpace(xml)) return;
+
+                if (xml.Contains("Welcome to Chrome") || xml.Contains("terms_accept") || xml.Contains("Accept & continue") || xml.Contains("Accept &amp; continue"))
+                {
+                    if (!ClickByResourceId(deviceID, "terms_accept", xml))
+                    {
+                        if (!ClickByDumpXml(deviceID, "Accept & continue", 1, 300))
+                        {
+                            AdbTap(deviceID, 720, 2736);
+                        }
+                    }
+                    await DelayWithPause(2500, token);
+                    continue;
+                }
+
+                if (xml.Contains("Turn on sync?") || xml.Contains("Yes, I'm in") || xml.Contains("No thanks") || xml.Contains("Add account"))
+                {
+                    if (!ClickByDumpXml(deviceID, "No thanks", 1, 300))
+                    {
+                        AdbTap(deviceID, 210, 2764);
+                    }
+                    await DelayWithPause(2500, token);
+                    continue;
+                }
+
+                if (xml.Contains("Continue as "))
+                {
+                    ClickByDumpXml(deviceID, "Continue as", 1, 300);
+                    await DelayWithPause(2500, token);
+                    continue;
+                }
+
+                break;
+            }
+        }
+
+        async Task<bool> CompleteTikTokGoogleSignupInChromeAsync(string deviceID, string googleEmail, CancellationToken token)
+        {
+            int googleClickAttempts = 0;
+
+            for (int i = 0; i < 40; i++)
+            {
+                if (token.IsCancellationRequested) return false;
+                CheckPause(token);
+                DismissSystemPopups(deviceID);
+
+                string xml = Android.GetUIDumpSafe(deviceID);
+                if (string.IsNullOrWhiteSpace(xml))
+                {
+                    if (IsCurrentFocus(deviceID, "com.android.chrome"))
+                    {
+                        if (googleClickAttempts == 0)
+                        {
+                            googleClickAttempts++;
+                            UpdateProcess(deviceID + $" 👉 [Fallback] Dump XML Chrome rỗng, đóng popup & bấm Continue with Google...");
+                            AdbTap(deviceID, 720, 500);
+                            await DelayWithPause(800, token);
+                            AdbTap(deviceID, 720, 1390);
+                            await DelayWithPause(5000, token);
+                            continue;
+                        }
+                        else if (googleClickAttempts == 1)
+                        {
+                            googleClickAttempts++;
+                            UpdateProcess(deviceID + $" 👉 [Fallback] Chọn tài khoản Google & bấm Tiếp tục trong Chrome...");
+                            AdbTap(deviceID, 720, 2598);
+                            await DelayWithPause(800, token);
+                            AdbTap(deviceID, 720, 1320);
+                            await DelayWithPause(1500, token);
+                            AdbTap(deviceID, 1050, 2493);
+                            await DelayWithPause(5000, token);
+                            continue;
+                        }
+                    }
+                    await DelayWithPause(1000, token);
+                    continue;
+                }
+
+                // Nếu Google trả trang Error 400 -> Quay lại trang đăng ký TikTok và bấm đăng nhập lại cho đến khi thành công
+                bool isGoogle400 = xml.Contains("Error 400") ||
+                                   xml.Contains("400 (Bad Request)") ||
+                                   xml.Contains("af-error-page2") ||
+                                   xml.Contains("400. That’s an error") ||
+                                   xml.Contains("400. That's an error") ||
+                                   xml.Contains("Bad Request") ||
+                                   (xml.Contains("400.") && (xml.Contains("Google") || xml.Contains("error")));
+                if (isGoogle400)
+                {
+                    UpdateProcess(deviceID + " ⚠️ Google trả Error 400 (Bad Request) -> Quay lại trang đăng ký TikTok và bấm Continue with Google lại...");
+
+                    // Thử bấm Back
+                    Android.GuiKey(deviceID, ADBKey.KEYCODE_BACK);
+                    await DelayWithPause(1500, token);
+
+                    // Mở lại trang đăng ký TikTok trên Chrome
+                    AdbShell(deviceID, "am start -a android.intent.action.VIEW -d \"https://www.tiktok.com/signup/\" com.android.chrome");
+                    await DelayWithPause(4000, token);
+
+                    // Chạm tắt popup overlay nếu có
+                    AdbTap(deviceID, 720, 500);
+                    await DelayWithPause(800, token);
+
+                    // Reset lượt thử để tiếp tục đăng nhập cho đến khi thành công
+                    googleClickAttempts = 0;
+                    i = -1;
+                    continue;
+                }
+
+                // 1. Kiểm tra nếu đã chuyển sang app TikTok hoặc đã vào feed
+                if (IsCurrentFocus(deviceID, "com.zhiliaoapp.musically") ||
+                    xml.Contains("package=\"com.zhiliaoapp.musically\"") ||
+                    xml.Contains("com.zhiliaoapp.musically") ||
+                    TikTokAppIsLoggedIn(xml) ||
+                    xml.Contains("NewUserJourneyActivity"))
+                {
+                    UpdateProcess(deviceID + " 🟢 Đã hoàn tất đăng ký Chrome và chuyển sang app TikTok!");
+                    return true;
+                }
+
+                if (ChromeHasTikTokFeed(xml))
+                {
+                    UpdateProcess(deviceID + " ✅ Chrome đã vào TikTok feed sau signup.");
+                    return true;
+                }
+
+                // 2. Màn hình Create username -> Bấm Skip
+                if (xml.Contains("Create username") || xml.Contains("create-username") || xml.Contains("create-usern"))
+                {
+                    UpdateProcess(deviceID + " 👉 Chrome đang ở màn Create username, bấm Skip.");
+                    if (!ClickByDumpXml(deviceID, "Skip", 1, 300))
+                    {
+                        AdbTap(deviceID, 110, 370);
+                    }
+                    await DelayWithPause(3500, token);
+
+                    string postSkipXml = Android.GetUIDumpSafe(deviceID);
+                    if (IsCurrentFocus(deviceID, "com.zhiliaoapp.musically") ||
+                        (!string.IsNullOrWhiteSpace(postSkipXml) && (postSkipXml.Contains("com.zhiliaoapp.musically") || postSkipXml.Contains("NewUserJourneyActivity"))) ||
+                        ChromeHasTikTokFeed(postSkipXml) ||
+                        TikTokAppIsLoggedIn(postSkipXml))
+                    {
+                        UpdateProcess(deviceID + " 🟢 Đã hoàn tất đăng ký Chrome và chuyển sang app TikTok!");
+                        return true;
+                    }
+                    continue;
+                }
+
+                // 2b. Màn hình khảo sát Tell us more about yourself -> Bấm Skip
+                if (xml.Contains("Tell us more about yourself") || xml.Contains("How do you identify") || xml.Contains("Prefer not to say"))
+                {
+                    UpdateProcess(deviceID + " 👉 Chrome gặp màn hình 'Tell us more about yourself' -> Bấm Skip...");
+                    if (!ClickByDumpXml(deviceID, "Skip", 1, 300) && !ifm.ClickByText(deviceID, "Skip"))
+                    {
+                        AdbTap(deviceID, 407, 2771);
+                    }
+                    await DelayWithPause(3000, token);
+                    continue;
+                }
+
+                // 3. Màn hình ngày sinh -> age-gate
+                if (xml.Contains("When’s your birthday") || xml.Contains("When's your birthday") || xml.Contains("Birthday") || xml.Contains("age-gate"))
+                {
+                    UpdateProcess(deviceID + " 👉 Chrome đang ở age-gate, chọn ngày sinh rồi bấm Next.");
+                    await SetTikTokChromeBirthdayAsync(deviceID, token);
+                    continue;
+                }
+
+                // 4. Màn hình đồng ý consent Google
+                if (xml.Contains("Đăng nhập vào TikTok") || xml.Contains("Sign in to TikTok") ||
+                    xml.Contains("Google will allow") || xml.Contains("Google sẽ cho phép"))
+                {
+                    UpdateProcess(deviceID + " 👉 Bấm consent Google/Tiếp tục trong Chrome.");
+                    if (!ClickByDumpXml(deviceID, "Tiếp tục", 1, 300) &&
+                        !ClickByDumpXml(deviceID, "Continue", 1, 300))
+                    {
+                        AdbTap(deviceID, 1050, 2493);
+                    }
+                    await DelayWithPause(7000, token);
+                    continue;
+                }
+
+                // 5. Màn hình Continue as của Google One Tap
+                if (xml.Contains("Continue as ") || xml.Contains("account_picker_continue_as_button"))
+                {
+                    UpdateProcess(deviceID + " 👉 Bấm Continue as trong Chrome account picker.");
+                    if (!ClickByResourceId(deviceID, "account_picker_continue_as_button", xml) &&
+                        !ClickByDumpXml(deviceID, "Continue as", 1, 300))
+                    {
+                        AdbTap(deviceID, 720, 2598);
+                    }
+                    await DelayWithPause(5000, token);
+                    continue;
+                }
+
+                // 6. Màn hình chọn tài khoản Google (account chooser)
+                if (xml.Contains("Chọn tài khoản") || xml.Contains("Choose an account") || xml.Contains("accountchooser") ||
+                    (!string.IsNullOrWhiteSpace(googleEmail) && xml.Contains(googleEmail)))
+                {
+                    UpdateProcess(deviceID + " 👉 Chọn tài khoản Google trong Chrome.");
+                    if (!ClickExactOrContainingText(deviceID, xml, googleEmail) &&
+                        !ClickByDumpXml(deviceID, "Huỳnh", 1, 200))
+                    {
+                        AdbTap(deviceID, 700, 1320);
+                    }
+                    await DelayWithPause(6000, token);
+                    continue;
+                }
+
+                // 7. Xử lý popup che màn hình nếu có (overlay "Get the full app experience", infobar, cookies)
+                if (await DismissChromeBlockingPopupsAsync(deviceID, xml, token))
+                {
+                    if (!ChromeHasTikTokSignup(xml))
+                    {
+                        continue;
+                    }
+                }
+
+                // 8. MÀN HÌNH CHỌN ĐĂNG KÝ / ĐĂNG NHẬP -> BẤM CONTINUE WITH GOOGLE
+                if (ChromeHasTikTokSignup(xml) && googleClickAttempts < 6)
+                {
+                    googleClickAttempts++;
+                    UpdateProcess(deviceID + $" 👉 Bấm Continue with Google trên TikTok trong Chrome (lần {googleClickAttempts})...");
+                    if (xml.Contains("infobar_close_button"))
+                    {
+                        ClickByResourceId(deviceID, "infobar_close_button", xml);
+                        await DelayWithPause(400, token);
+                    }
+                    bool clicked = ClickTikTokGoogleButton(deviceID, xml);
+                    if (!clicked)
+                    {
+                        AdbTap(deviceID, 720, 1390);
+                    }
+                    await DelayWithPause(6000, token);
+                    continue;
+                }
+
+                if (xml.Contains("tux_dual_ball_loading"))
+                {
+                    UpdateProcess(deviceID + " ⏳ Đang nạp trang (loading)...");
+                    await DelayWithPause(2000, token);
+                    continue;
+                }
+
+                LogVisibleUiNodes(deviceID, xml);
+                await DelayWithPause(1500, token);
+            }
+
+            return false;
+        }
+
+        async Task<bool> DismissChromeBlockingPopupsAsync(string deviceID, string xml, CancellationToken token)
+        {
+            if (string.IsNullOrWhiteSpace(xml)) return false;
+
+            // 1. Dialog "Install app"
+            if (xml.Contains("Install app") && xml.Contains("TikTok") && xml.Contains("Cancel"))
+            {
+                UpdateProcess(deviceID + " 👉 Hủy dialog Install app của Chrome...");
+                if (!ClickByResourceId(deviceID, "negative_button", xml) &&
+                    !ClickByDumpXml(deviceID, "Cancel", 1, 200))
+                {
+                    AdbTap(deviceID, 865, 1726);
+                }
+                await DelayWithPause(1000, token);
+                return true;
+            }
+
+            // 2. Thanh infobar (Sync, Add to Home screen, Translate, Notifications)
+            if (xml.Contains("infobar_close_button"))
+            {
+                UpdateProcess(deviceID + " 👉 Đóng thanh infobar của Chrome...");
+                ClickByResourceId(deviceID, "infobar_close_button", xml);
+                await DelayWithPause(800, token);
+                if (ChromeHasTikTokSignup(xml)) return false;
+                return true;
+            }
+
+            // 3. Popup xin quyền Thông báo (Notifications)
+            if (xml.Contains("notifications") && (xml.Contains("Block") || xml.Contains("Don't allow")))
+            {
+                UpdateProcess(deviceID + " 👉 Chặn popup thông báo...");
+                if (!ClickByDumpXml(deviceID, "Block", 1, 200))
+                {
+                    ClickByDumpXml(deviceID, "Don't allow", 1, 200);
+                }
+                await DelayWithPause(1000, token);
+                return true;
+            }
+
+            // 4. Banner Cookie trên TikTok web
+            if (xml.Contains("cookies") || xml.Contains("Cookie"))
+            {
+                if (xml.Contains("Accept all") || xml.Contains("Accept all cookies"))
+                {
+                    UpdateProcess(deviceID + " 👉 Chấp nhận cookie TikTok web...");
+                    ClickByDumpXml(deviceID, "Accept all", 1, 300);
+                    await DelayWithPause(1000, token);
+                    return true;
+                }
+                if (xml.Contains("Decline all"))
+                {
+                    UpdateProcess(deviceID + " 👉 Từ chối cookie TikTok web...");
+                    ClickByDumpXml(deviceID, "Decline all", 1, 300);
+                    await DelayWithPause(1000, token);
+                    return true;
+                }
+            }
+
+            // 5. Popup "Save password" / "Google Password Manager"
+            if (xml.Contains("Save password") || xml.Contains("Save password?"))
+            {
+                UpdateProcess(deviceID + " 👉 Bỏ qua popup lưu mật khẩu Chrome...");
+                if (!ClickByDumpXml(deviceID, "Never", 1, 200))
+                {
+                    ClickByDumpXml(deviceID, "No thanks", 1, 200);
+                }
+                await DelayWithPause(1000, token);
+                return true;
+            }
+
+            // 6. Popup "Get the full app experience" / "Open TikTok" / "TikTok Lite"
+            if (xml.Contains("Get the full app experience") ||
+                xml.Contains("Try out more features") ||
+                xml.Contains("TikTok Lite") ||
+                xml.Contains("Open TikTok") ||
+                xml.Contains("open_app_banner"))
+            {
+                UpdateProcess(deviceID + " 👉 Đóng popup mở TikTok app trên Chrome (chạm vùng trống)...");
+                if (ClickByDumpXml(deviceID, "Not now", 1, 200) ||
+                    ClickByDumpXml(deviceID, "Stay in Chrome", 1, 200) ||
+                    ClickByDumpXml(deviceID, "Continue in browser", 1, 200))
+                {
+                    await DelayWithPause(1200, token);
+                    return true;
+                }
+
+                // Chạm vào khoảng trống phía trên (720, 500) để tắt bottom sheet popup mà không mở app TikTok
+                AdbTap(deviceID, 720, 500);
+                await DelayWithPause(800, token);
+                if (ChromeHasTikTokSignup(xml)) return false;
+                return true;
+            }
+
+            return false;
+        }
+
+        async Task SetTikTokChromeBirthdayAsync(string deviceID, CancellationToken token)
+        {
+            UpdateProcess(deviceID + " 🎂 Chọn ngày sinh trên Chrome (tuổi ~24)...");
+
+            // Vuốt cột năm (X=1100, Y=1400 -> 2100 trong 200ms) 4 lần -> về năm 2001 (khoảng 24 tuổi)
+            for (int i = 0; i < 4; i++)
+            {
+                AdbShell(deviceID, "input swipe 1100 1400 1100 2100 200");
+                await DelayWithPause(600, token);
+            }
+
+            // Đóng banner 'Add TikTok to Home screen' ở dưới nếu có
+            string xml = Android.GetUIDumpSafe(deviceID);
+            if (!string.IsNullOrWhiteSpace(xml) && xml.Contains("infobar_close_button"))
+            {
+                ClickByResourceId(deviceID, "infobar_close_button", xml);
+                await DelayWithPause(500, token);
+            }
+
+            // Bấm nút Next (tâm nút tại 720, 1060 trên màn hình 1440x2904)
+            UpdateProcess(deviceID + " 👉 Bấm Next sau khi chọn ngày sinh...");
+            if (!ClickByDumpXml(deviceID, "Next", 1, 300) &&
+                !ClickByDumpXml(deviceID, "Continue", 1, 300))
+            {
+                AdbTap(deviceID, 720, 1060);
+            }
+            await DelayWithPause(6000, token);
+        }
+
+        async Task<bool> OpenTikTokAppAndAttachGoogleAsync(string deviceID, string googleEmail, CancellationToken token)
+        {
+            UpdateProcess(deviceID + " 📱 Mở app TikTok và nối account Google đã tạo từ Chrome...");
+            Android.MoApp(deviceID, "com.zhiliaoapp.musically");
+            await DelayWithPause(5000, token);
+
+            for (int i = 0; i < 30; i++)
+            {
+                if (token.IsCancellationRequested) return false;
+                CheckPause(token);
+                DismissSystemPopups(deviceID);
+
+                string xml = Android.GetUIDumpSafe(deviceID);
+                if (string.IsNullOrWhiteSpace(xml))
+                {
+                    await DelayWithPause(1000, token);
+                    continue;
+                }
+
+                // Nếu app TikTok hiển thị màn hình 'Tell us more about yourself' -> Bấm Skip
+                if (xml.Contains("Tell us more about yourself") || xml.Contains("How do you identify") || xml.Contains("Prefer not to say"))
+                {
+                    UpdateProcess(deviceID + " 👉 App TikTok gặp màn hình 'Tell us more about yourself' -> Bấm Skip...");
+                    if (!ClickByDumpXml(deviceID, "Skip", 1, 300) && !ifm.ClickByText(deviceID, "Skip"))
+                    {
+                        AdbTap(deviceID, 407, 2771);
+                    }
+                    await DelayWithPause(2500, token);
+                    continue;
+                }
+
+                // Nếu app TikTok hiển thị màn hình chọn sở thích (NewUserJourneyActivity / Skip button) -> Bấm Skip
+                if (xml.Contains("NewUserJourneyActivity") || xml.Contains(":id/d2b") ||
+                    xml.Contains("Choose your interests") || xml.Contains("Choose what you like") || xml.Contains("interests"))
+                {
+                    UpdateProcess(deviceID + " 👉 App TikTok ở màn hình chọn sở thích -> Bấm Skip...");
+                    if (!ClickByDumpXml(deviceID, "Skip", 1, 300) && !ifm.ClickByText(deviceID, "Skip"))
+                    {
+                        AdbTap(deviceID, 388, 2785);
+                    }
+                    await DelayWithPause(2500, token);
+                    UpdateProcess(deviceID + " ✅ App TikTok đã nhận account Google thành công!");
+                    return true;
+                }
+
+                // Nếu đã vào feed, profile -> Đã nối Google thành công!
+                if (TikTokAppIsLoggedIn(xml) ||
+                    xml.Contains("Swipe up for more") ||
+                    xml.Contains("Start watching"))
+                {
+                    UpdateProcess(deviceID + " ✅ App TikTok đã nhận account Google thành công!");
+                    return true;
+                }
+
+                // Nếu app TikTok hiển thị màn hình ngày sinh -> Đóng & mở lại app để vào thẳng feed
+                if (xml.Contains("When’s your birthday") || xml.Contains("When's your birthday") || xml.Contains("Birthday"))
+                {
+                    UpdateProcess(deviceID + " 👉 App TikTok ở màn hình ngày sinh -> Đóng & mở lại app để vào thẳng feed...");
+                    AdbShell(deviceID, "am force-stop com.zhiliaoapp.musically");
+                    await DelayWithPause(2000, token);
+                    Android.MoApp(deviceID, "com.zhiliaoapp.musically");
+                    await DelayWithPause(5000, token);
+                    continue;
+                }
+
+                if (xml.Contains("Continue as ") || xml.Contains("Sign in to TikTok") || xml.Contains("continue_button"))
+                {
+                    UpdateProcess(deviceID + " 👉 Bấm Continue as trên Google native sheet.");
+                    if (!ClickByResourceId(deviceID, "continue_button", xml) &&
+                        !ClickByDumpXml(deviceID, "Continue as", 1, 300))
+                    {
+                        AdbTap(deviceID, 720, 2736);
+                    }
+                    await DelayWithPause(6000, token);
+                    continue;
+                }
+
+                if (xml.Contains("Choose an account") || xml.Contains("to continue to TikTok") || xml.Contains("account_name") ||
+                    (!string.IsNullOrWhiteSpace(googleEmail) && xml.Contains(googleEmail)))
+                {
+                    UpdateProcess(deviceID + " 👉 Chọn tài khoản Google trong app TikTok.");
+                    if (!ClickExactOrContainingText(deviceID, xml, googleEmail) &&
+                        !ClickByResourceId(deviceID, "account_name", xml))
+                    {
+                        AdbTap(deviceID, 720, 1423);
+                    }
+                    await DelayWithPause(7000, token);
+                    continue;
+                }
+
+                if (xml.Contains("Continue with Google"))
+                {
+                    UpdateProcess(deviceID + " 👉 Bấm Continue with Google trong app TikTok.");
+                    if (!ClickTikTokGoogleButton(deviceID, xml))
+                    {
+                        AdbTap(deviceID, 720, 2297);
+                    }
+                    await DelayWithPause(6000, token);
+                    continue;
+                }
+
+                if (xml.Contains("Not now"))
+                {
+                    ClickByDumpXml(deviceID, "Not now", 1, 300);
+                    await DelayWithPause(1500, token);
+                    continue;
+                }
+
+                await DelayWithPause(1500, token);
+            }
+
+            return false;
+        }
+
+        bool ChromeHasTikTokSignup(string xml)
+        {
+            if (string.IsNullOrWhiteSpace(xml)) return false;
+            if (xml.Contains("package=\"com.zhiliaoapp.musically\"") || xml.Contains("com.zhiliaoapp.musically"))
+                return false;
+            if (xml.Contains("accounts.google.com") || xml.Contains("accountchooser") || xml.Contains("Choose an account") || xml.Contains("Chọn tài khoản"))
+                return false;
+            if (xml.Contains("Error 400") || xml.Contains("400 (Bad Request)") || xml.Contains("af-error-page2") || xml.Contains("400."))
+                return false;
+            if (xml.Contains("age-gate") || xml.Contains("When’s your birthday") || xml.Contains("When's your birthday"))
+                return false;
+            if (xml.Contains("create-username") || xml.Contains("Create username"))
+                return false;
+
+            return xml.Contains("Continue with Google") ||
+                   xml.Contains("Sign in with Google") ||
+                   xml.Contains("Tiếp tục với Google") ||
+                   xml.Contains("tiktok.com/signup") ||
+                   xml.Contains("tiktok.com/login") ||
+                   ((xml.Contains("Sign up") || xml.Contains("Log in") || xml.Contains("Đăng ký") || xml.Contains("Đăng nhập")) &&
+                    (xml.Contains("Google") || xml.Contains("phone") || xml.Contains("email")));
+        }
+
+        bool ChromeHasTikTokFeed(string xml)
+        {
+            return !string.IsNullOrWhiteSpace(xml) &&
+                   (xml.Contains("tiktok.com/foryou") ||
+                    (xml.Contains("For You") && xml.Contains("Following") && (xml.Contains("Profile") || xml.Contains("Inbox"))));
+        }
+
+        bool TikTokAppIsLoggedIn(string xml)
+        {
+            return !string.IsNullOrWhiteSpace(xml) &&
+                   (xml.Contains("com.zhiliaoapp.musically:id/oph") ||
+                    (xml.Contains("For You") && xml.Contains("Following") && xml.Contains("Profile") && xml.Contains("Inbox")) ||
+                    xml.Contains("Edit profile") || xml.Contains("Edit Profile") || xml.Contains("Hồ sơ") ||
+                    (xml.Contains("Following") && xml.Contains("Followers") && (xml.Contains("Likes") || xml.Contains("Add name"))));
+        }
+
+        bool TapChromeAddressBar(string deviceID)
+        {
+            string xml = Android.GetUIDumpSafe(deviceID);
+            return ClickByResourceId(deviceID, "com.android.chrome:id/url_bar", xml) ||
+                   ClickByResourceId(deviceID, "url_bar", xml) ||
+                   ClickByResourceId(deviceID, "search_box_text", xml);
+        }
+
+        bool ClickTikTokGoogleButton(string deviceID, string xml)
+        {
+            return ClickTextNodeCenter(deviceID, xml, "Continue with Google", true) ||
+                   ClickTextNodeCenter(deviceID, xml, "Sign in with Google", true) ||
+                   ifm.ClickByText(deviceID, "Continue with Google");
+        }
+
+        bool ClickExactOrContainingText(string deviceID, string xml, string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            return ClickTextNodeCenter(deviceID, xml, text, false) ||
+                   ClickTextNodeCenter(deviceID, xml, text, true);
+        }
+
+        bool ClickTextNodeCenter(string deviceID, string xml, string text, bool allowContains)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(xml) || string.IsNullOrWhiteSpace(text)) return false;
+
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(xml);
+
+                string expected = text.Trim();
+                foreach (XmlNode node in doc.SelectNodes("//node"))
+                {
+                    string nodeText = WebUtility.HtmlDecode(node.Attributes?["text"]?.Value ?? "").Trim();
+                    string nodeDesc = WebUtility.HtmlDecode(node.Attributes?["content-desc"]?.Value ?? "").Trim();
+
+                    bool matched = allowContains
+                        ? ((!string.IsNullOrEmpty(nodeText) && nodeText.IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                           (!string.IsNullOrEmpty(nodeDesc) && nodeDesc.IndexOf(expected, StringComparison.OrdinalIgnoreCase) >= 0))
+                        : (string.Equals(nodeText, expected, StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(nodeDesc, expected, StringComparison.OrdinalIgnoreCase));
+
+                    if (!matched) continue;
+
+                    string bounds = node.Attributes?["bounds"]?.Value;
+                    if (GetCenter(bounds, out int cx, out int cy))
+                    {
+                        AdbTap(deviceID, cx, cy);
+                        return true;
+                    }
+                }
+            }
+            catch { }
+
+            return false;
+        }
 
         async Task DelayWithPause(int ms, CancellationToken token)
         {
@@ -5659,20 +6189,29 @@ namespace WindowsFormsApp2
 
             try
             {
+                Console.WriteLine(log);
+            }
+            catch { }
+
+            try
+            {
                 File.AppendAllText("process_log.txt", log + Environment.NewLine);
             }
             catch { }
 
-            if (processText.InvokeRequired)
+            if (processText != null && processText.IsHandleCreated)
             {
-                processText.BeginInvoke(new Action(() =>
+                if (processText.InvokeRequired)
+                {
+                    processText.BeginInvoke(new Action(() =>
+                    {
+                        processText.AppendText(log + Environment.NewLine);
+                    }));
+                }
+                else
                 {
                     processText.AppendText(log + Environment.NewLine);
-                }));
-            }
-            else
-            {
-                processText.AppendText(log + Environment.NewLine);
+                }
             }
 
             // Cập nhật realtime vào cột Log của DataGridView cho device tương ứng
@@ -5682,7 +6221,7 @@ namespace WindowsFormsApp2
                 {
                     UpdateDeviceStatus(deviceID, text);
                 }
-                else if (dgvDevices != null)
+                else if (dgvDevices != null && dgvDevices.IsHandleCreated)
                 {
                     if (dgvDevices.InvokeRequired)
                     {
@@ -6423,7 +6962,7 @@ namespace WindowsFormsApp2
                     string bounds = node.Attributes?["bounds"]?.Value;
                     if (GetCenter(bounds, out int cx, out int cy))
                     {
-                        KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
+                        AdbTap(deviceID, cx, cy);
                         return true;
                     }
                 }
@@ -6436,7 +6975,7 @@ namespace WindowsFormsApp2
         {
             try
             {
-                KAutoHelper.ADBHelper.Tap(deviceID, x, y);
+                AdbTap(deviceID, x, y);
                 Thread.Sleep(150);
                 string delKeys = string.Join(" ", Enumerable.Repeat("67", count));
                 AdbShell(deviceID, $"input keyevent 123 {delKeys}");
@@ -6611,7 +7150,7 @@ namespace WindowsFormsApp2
                                 {
                                     int cx = (x1 + x2) / 2;
                                     int cy = (y1 + y2) / 2;
-                                    KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
+                                    AdbTap(deviceID, cx, cy);
                                     return true;
                                 }
                             }
@@ -6657,7 +7196,7 @@ namespace WindowsFormsApp2
                             string bounds = node.Attributes?["bounds"]?.Value;
                             if (GetCenter(bounds, out int cx, out int cy))
                             {
-                                KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
+                                AdbTap(deviceID, cx, cy);
                                 return true;
                             }
                         }
@@ -6686,7 +7225,7 @@ namespace WindowsFormsApp2
                                 string bounds = node.Attributes?["bounds"]?.Value;
                                 if (GetCenter(bounds, out int cx, out int cy))
                                 {
-                                    KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
+                                    AdbTap(deviceID, cx, cy);
                                     return true;
                                 }
                             }
@@ -6715,7 +7254,7 @@ namespace WindowsFormsApp2
                             string bounds = node.Attributes?["bounds"]?.Value;
                             if (GetCenter(bounds, out int cx, out int cy))
                             {
-                                KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
+                                AdbTap(deviceID, cx, cy);
                                 return true;
                             }
                         }
@@ -6739,7 +7278,7 @@ namespace WindowsFormsApp2
                     string bounds = node.Attributes?["bounds"]?.Value;
                     if (GetCenter(bounds, out int cx, out int cy))
                     {
-                        KAutoHelper.ADBHelper.Tap(deviceID, cx, cy);
+                        AdbTap(deviceID, cx, cy);
                     }
                 }
             }
